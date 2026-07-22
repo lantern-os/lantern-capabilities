@@ -1,7 +1,9 @@
 # lantern-capabilities — Architecture
 
 Companion to [wiki/Security](https://github.com/lantern-os/lantern-docs/blob/main/wiki/Security.md) and the authoritative
-[RFC-0003](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0003-capability-model.md).
+[RFC-0003](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0003-capability-model.md), fixed by
+[ADR-0005](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0005-object-capabilities-as-universal-authority-model.md) and
+[ADR-0006](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0006-three-layer-capability-structure.md).
 
 ## Core properties (invariants)
 - **Unforgeability** — kernel-enforced for live caps; signature-enforced for sealed caps.
@@ -10,6 +12,9 @@ Companion to [wiki/Security](https://github.com/lantern-os/lantern-docs/blob/mai
 - **Monotone attenuation** — `mint` only ever produces an equal-or-weaker capability.
 - **Transitive revocation** — revoking a parent revokes everything derived from it.
 - **No ambient authority** — a component with no caps can compute and nothing else.
+- **Auditability** — grants and revocations affecting user data or agents are observable by
+  the user; this is what [`lantern-ai-runtime`](https://github.com/lantern-os/lantern-ai-runtime)'s audit log and
+  [`lantern-shell`](https://github.com/lantern-os/lantern-shell)'s audit surface are built on.
 
 ## Operations
 | Op | Semantics |
