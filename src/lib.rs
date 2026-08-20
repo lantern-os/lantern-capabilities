@@ -17,13 +17,16 @@
 //! between the generic service-capability *mechanism* (this crate,
 //! `lantern-runtime`) and what any one service's capabilities designate.
 //!
-//! **What this is not yet:** a real, standalone confined program
-//! `lantern-boot` loads and runs under QEMU as a third party to the existing
-//! two-thread demo — that needs loader/ELF-embedding work in `lantern-boot`
-//! this crate doesn't touch. This is the broker's core logic, proven against a
-//! real [`lantern_kernel::state::KernelState`] and real kernel calls the same
-//! way `lantern-boot/src/loader.rs` proves its own logic before ever being
-//! wired into a full boot flow. See `STATUS.md`.
+//! **What this is not yet:** a real, standalone confined program. Every
+//! [`Broker`] method takes `&mut lantern_kernel::state::KernelState` directly
+//! — valid only for privileged, same-address-space code (the category
+//! `lantern-boot/src/loader.rs`'s root task is in), not a real confined
+//! U-mode program, which has no such pointer and can only reach the kernel
+//! via actual `ecall`s (the way `hello-service` does, with hand-written
+//! inline asm). This crate proves the *sequence of kernel operations* a
+//! broker needs is correct — the same validate-before-deployment role
+//! `loader.rs` plays for its own logic — not a deployable implementation of
+//! it. See `STATUS.md`.
 #![cfg_attr(not(test), no_std)]
 
 use lantern_hal::{MessageTag, TrapFrame};

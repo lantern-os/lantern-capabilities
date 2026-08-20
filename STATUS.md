@@ -26,17 +26,27 @@
 - Fix the rights lattice per object type.
 - The sealed-cap token format (RFC-0003's third layer) — blocked on `lantern-crypto`'s
   keystore, see "Blocked on".
-- Wire `Broker` into a real, standalone confined program `lantern-boot` loads and runs
-  under QEMU as a third party to its existing two-thread demo — this session's work proves
-  the broker's logic against a real `KernelState`, but nothing yet deploys it as an actual
-  running service. Needs `lantern-boot/src/loader.rs` extended to load a third ELF binary
-  (or a generalization of `load()` beyond the current hardcoded two-copies-of-one-binary
-  demo shape).
-- `Broker::grant`'s `Send`-not-`Call`/`Reply` limitation is a direct consequence of
-  `Reply`'s return leg not supporting capability transfer yet
-  (`lantern-kernel/STATUS.md`'s "Next") — revisit once that lands, since a
-  request/response-shaped grant (`Call` in, capability back on `Reply`) is a more natural
-  client-side API than a bare `Recv`-then-`Send`.
+- **`Broker` as written is not a deployable confined-service implementation.** Its methods
+  take `&mut lantern_kernel::state::KernelState` directly — valid only for privileged,
+  same-address-space code (exactly the category `lantern-boot/src/loader.rs`'s root task is
+  in), not for a real confined U-mode program, which has no such pointer and can only reach
+  the kernel via actual `ecall`s (the way `hello-service` does, with hand-written inline
+  asm). This session's work proves the *sequence of kernel operations* a broker needs is
+  correct, the same validate-before-deployment role `loader.rs` plays for its own logic —
+  it is not itself that deployment. Turning this into a real running service needs a
+  from-scratch raw-`ecall` reimplementation of `mint`/`grant`/`revoke` (or `Broker` itself
+  compiled as a genuinely separate, `no_std`, `ecall`-issuing binary — either way, a
+  different code path from what exists today, not a thin wrapper around it), plus
+  `lantern-boot/src/loader.rs` extended to load it as a third program alongside its
+  existing two-thread demo (or a generalization of `load()` beyond the current
+  hardcoded two-copies-of-one-binary shape).
+- `Broker::grant`'s `Send`-not-`Call`/`Reply` shape can now be revisited: `lantern-kernel`'s
+  `Reply` supports attaching a capability as of this session
+  (`lantern-kernel/STATUS.md`), via a new `Call`-only `tag.extra_caps == 2` convention for
+  registering the reply-leg destination. A `Broker::grant_via_reply`-shaped API (client
+  `Call`s a request, broker `Reply`s with the capability attached) would be a more natural
+  fit than the current bare `Recv`-then-`Send` two-step. Not done — `Broker`'s public API is
+  unchanged this session; this is additive work, not a fix for anything broken today.
 - A concrete first consumer: either `lantern-filesystem` (Filesystem v0) or the
   `lantern-crypto` keystore building real object semantics on top of `Broker`.
 
