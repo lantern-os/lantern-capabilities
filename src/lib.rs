@@ -134,11 +134,10 @@ impl Broker {
     /// transferred capability, same convention `lantern_kernel::ipc` uses
     /// throughout).
     ///
-    /// Deliberately `Send`, not `Call`/`Reply`: `Reply`'s return leg does not
-    /// support attaching a capability yet (RFC-0010 left its register layout
-    /// as an open question) — a client that wants a granted capability back
-    /// registers a destination slot on a plain `Recv` instead of expecting
-    /// one on the reply to whatever request `Call` it may have made first.
+    /// Fits an unsolicited grant, or a client waiting in a bare `Recv`. For
+    /// the more common request/response shape — a client `Call`s asking for
+    /// something, this broker replies with the grant in the same round trip
+    /// — see [`Broker::grant_via_reply`] instead.
     pub fn grant(
         &self,
         state: &mut KernelState,
@@ -152,6 +151,31 @@ impl Broker {
         frame.set_mr(2, payload.0);
         frame.set_mr(3, payload.1);
         ipc::send(state, self.self_tcb, endpoint_cptr, &mut frame, false)
+    }
+
+    /// Like [`Broker::grant`], but replies to whichever `Call` this broker is
+    /// currently holding a `reply_to` link for, instead of `Send`ing to an
+    /// explicit endpoint — `lantern_kernel::ipc::reply`'s `tag.extra_caps ==
+    /// 1` reply-leg transfer, real as of RFC-0010's kernel-side completion.
+    /// Lands in whatever destination slot the client registered on its
+    /// *original* `Call` (`tag.extra_caps == 2` there — this crate doesn't
+    /// manage that side, a client library or the SDK would); this broker's
+    /// own dispatch loop is expected to have already `Recv`'d that `Call`
+    /// (establishing the `reply_to` link `ipc::reply` needs) before calling
+    /// this. The natural shape for "ask, then be granted, in one round trip,"
+    /// rather than [`Broker::grant`]'s bare `Recv`-then-`Send`.
+    pub fn grant_via_reply(
+        &self,
+        state: &mut KernelState,
+        scratch_slot: CPtr,
+        payload: (usize, usize),
+    ) -> Result<(), SyscallError> {
+        let mut frame = TrapFrame::zeroed();
+        frame.set_tag(MessageTag { label: 0, length: 0, extra_caps: 1, flags: 0 });
+        frame.set_mr(1, scratch_slot);
+        frame.set_mr(2, payload.0);
+        frame.set_mr(3, payload.1);
+        ipc::reply(state, self.self_tcb, &mut frame)
     }
 
     /// Marks `badge` revoked. Does **not** touch the kernel capability the
@@ -345,5 +369,45 @@ mod tests {
     fn unknown_badge_reads_as_revoked_deny_by_default() {
         let f = setup();
         assert!(f.broker.is_revoked(999));
+    }
+
+    #[test]
+    fn grant_via_reply_delivers_in_the_same_round_trip_as_a_call() {
+        let mut f = setup();
+        let notif_idx = f.state.notifications.alloc(Notification::new()).unwrap();
+        let source = Capability::Notification {
+            id: NotificationId(notif_idx as u16),
+            badge: 0,
+            rights: Rights::READ.union(Rights::GRANT),
+        };
+        *f.state.cnodes.get_mut(0).unwrap().slot_mut(5).unwrap() = source;
+
+        // Broker Recv's first (nobody there yet), so it blocks and the client runs.
+        f.state.make_ready(f.client_tcb);
+        f.state.scheduler.current = Some(f.broker_tcb);
+        let mut recv_frame = TrapFrame::zeroed();
+        recv_frame.set_tag(MessageTag { label: 0, length: 0, extra_caps: 0, flags: 0 });
+        ipc::recv(&mut f.state, f.broker_tcb, f.ep_cptr, &mut recv_frame).unwrap();
+        assert_eq!(f.state.scheduler.current, Some(f.client_tcb));
+
+        // Client Calls, registering slot 9 as its own reply-leg destination
+        // (tag.extra_caps == 2 -- lantern_kernel::ipc::call's own convention,
+        // not something this crate manages).
+        let mut call_frame = TrapFrame::zeroed();
+        call_frame.set_tag(MessageTag { label: 0, length: 0, extra_caps: 2, flags: 0 });
+        call_frame.set_mr(1, 9);
+        ipc::call(&mut f.state, f.client_tcb, f.ep_cptr, &mut call_frame).unwrap();
+        assert_eq!(f.state.scheduler.current, Some(f.broker_tcb));
+
+        // Broker mints and replies with the grant attached, in one round trip.
+        let badge = f.broker.mint(&mut f.state, 5, 6, Rights::READ.union(Rights::GRANT)).unwrap();
+        f.broker.grant_via_reply(&mut f.state, 6, (111, 222)).unwrap();
+
+        assert_eq!(f.state.scheduler.current, Some(f.client_tcb));
+        assert!(!f.broker.is_revoked(badge));
+        let client_cnode = f.state.tcbs.get(f.client_tcb.0 as usize).unwrap().cspace.unwrap();
+        let landed = f.state.cnodes.get(client_cnode.0 as usize).unwrap().get(9).unwrap();
+        assert_eq!(landed.rights(), Rights::READ.union(Rights::GRANT));
+        assert!(matches!(landed, Capability::Notification { id, .. } if id == NotificationId(notif_idx as u16)));
     }
 }

@@ -21,6 +21,14 @@
   the kernel calls, the actual `cnode::invoke`/`ipc::send` functions, the same discipline
   `lantern-boot/src/loader.rs` follows for its own privileged operations. `cargo clippy -D
   warnings` clean on host and `riscv64gc-unknown-none-elf`.
+- **`Broker::grant_via_reply`**: the request/response-shaped grant `grant`'s own doc always
+  named as the more natural fit — client `Call`s a request (registering its own destination
+  slot via `tag.extra_caps == 2` on that `Call`), this broker replies with the capability
+  attached in the same round trip, via `lantern_kernel::ipc::reply`'s now-real
+  `extra_caps == 1` reply-leg transfer. `grant` (bare `Recv`-then-`Send`) is unchanged and
+  still the right fit for an unsolicited grant. 6 unit tests pass (1 new, driving a real
+  `Call`→`Recv`→mint→`Reply`-with-a-grant sequence end to end), `cargo clippy -D warnings`
+  clean on host and `riscv64gc-unknown-none-elf`.
 
 ## Next
 - Fix the rights lattice per object type.
@@ -40,13 +48,6 @@
   `lantern-boot/src/loader.rs` extended to load it as a third program alongside its
   existing two-thread demo (or a generalization of `load()` beyond the current
   hardcoded two-copies-of-one-binary shape).
-- `Broker::grant`'s `Send`-not-`Call`/`Reply` shape can now be revisited: `lantern-kernel`'s
-  `Reply` supports attaching a capability as of this session
-  (`lantern-kernel/STATUS.md`), via a new `Call`-only `tag.extra_caps == 2` convention for
-  registering the reply-leg destination. A `Broker::grant_via_reply`-shaped API (client
-  `Call`s a request, broker `Reply`s with the capability attached) would be a more natural
-  fit than the current bare `Recv`-then-`Send` two-step. Not done — `Broker`'s public API is
-  unchanged this session; this is additive work, not a fix for anything broken today.
 - A concrete first consumer: either `lantern-filesystem` (Filesystem v0) or the
   `lantern-crypto` keystore building real object semantics on top of `Broker`.
 
