@@ -26,7 +26,11 @@
 //! inline asm). This crate proves the *sequence of kernel operations* a
 //! broker needs is correct — the same validate-before-deployment role
 //! `loader.rs` plays for its own logic — not a deployable implementation of
-//! it. See `STATUS.md`.
+//! it. `lantern-boot`'s `lantern-boot-broker-demo` binary now proves that
+//! same sequence for real under confined U-mode `ecall`s, but as a
+//! hand-written reimplementation (`broker-service/`), not this crate's own
+//! code running — see `STATUS.md` for why that gap remains and what closing
+//! it would actually take.
 #![cfg_attr(not(test), no_std)]
 
 use lantern_hal::{MessageTag, TrapFrame};

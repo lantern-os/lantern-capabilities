@@ -34,20 +34,21 @@
 - Fix the rights lattice per object type.
 - The sealed-cap token format (RFC-0003's third layer) — blocked on `lantern-crypto`'s
   keystore, see "Blocked on".
-- **`Broker` as written is not a deployable confined-service implementation.** Its methods
-  take `&mut lantern_kernel::state::KernelState` directly — valid only for privileged,
-  same-address-space code (exactly the category `lantern-boot/src/loader.rs`'s root task is
-  in), not for a real confined U-mode program, which has no such pointer and can only reach
-  the kernel via actual `ecall`s (the way `hello-service` does, with hand-written inline
-  asm). This session's work proves the *sequence of kernel operations* a broker needs is
-  correct, the same validate-before-deployment role `loader.rs` plays for its own logic —
-  it is not itself that deployment. Turning this into a real running service needs a
-  from-scratch raw-`ecall` reimplementation of `mint`/`grant`/`revoke` (or `Broker` itself
-  compiled as a genuinely separate, `no_std`, `ecall`-issuing binary — either way, a
-  different code path from what exists today, not a thin wrapper around it), plus
-  `lantern-boot/src/loader.rs` extended to load it as a third program alongside its
-  existing two-thread demo (or a generalization of `load()` beyond the current
-  hardcoded two-copies-of-one-binary shape).
+- **The mint/grant sequence `Broker` implements is now proven under real confined U-mode
+  `ecall`s, not just against a direct `KernelState`** — `lantern-boot`'s new, isolated
+  `lantern-boot-broker-demo` binary (`lantern-boot/src/broker_demo/`,
+  `lantern-boot/STATUS.md`) hand-reimplements the same `Recv`→`Mint`→`Reply`-with-
+  `extra_caps==1` sequence as raw `ecall`s in a standalone confined program
+  (`broker-service/`), and a confined client (`broker-client/`) proves the granted
+  capability is genuinely functional by `Signal`-ing it — confirmed reproducible under
+  real QEMU. **`Broker`'s own Rust API still isn't what's running, and structurally can't
+  be as written**: its methods take `&mut lantern_kernel::state::KernelState` directly,
+  valid only for privileged, same-address-space code (`lantern-boot/src/loader.rs`'s own
+  category), never for a real confined U-mode program, which has no such pointer. Turning
+  `Broker` itself into deployable confined-service code — rather than a hand-duplicated
+  reimplementation of its logic — needs a genuine WASM/native confined runtime capable of
+  hosting real Rust service code (`lantern-runtime`'s eventual job), not more loader work;
+  `lantern-boot/STATUS.md`'s own "Next" has the fuller reasoning.
 - A concrete first consumer: either `lantern-filesystem` (Filesystem v0) or the
   `lantern-crypto` keystore building real object semantics on top of `Broker`.
 
