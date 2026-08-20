@@ -9,7 +9,7 @@ global namespace, no identity-based ACLs.
 - **Decision of record:** [RFC-0003 — The LanternOS capability model](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0003-capability-model.md).
 - **System context:** [wiki/Security](https://github.com/lantern-os/lantern-docs/blob/main/wiki/Security.md).
 
-> ⚠️ **Phase 0.** Design only; no code. See [`STATUS.md`](./STATUS.md).
+> ⚠️ **Phase 2.** Broker prototype in progress. See [`STATUS.md`](./STATUS.md).
 
 ## The three layers
 1. **Kernel capabilities** — seL4-style handles to kernel objects (in [`lantern-kernel`](https://github.com/lantern-os/lantern-kernel)).
