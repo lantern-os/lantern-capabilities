@@ -55,11 +55,12 @@
   hosting real Rust service code (`lantern-runtime`'s eventual job), not more loader work;
   `lantern-boot/STATUS.md`'s own "Next" has the fuller reasoning.
 - ~~A concrete first consumer: either `lantern-filesystem` (Filesystem v0) or the
-  `lantern-crypto` keystore building real object semantics on top of `Broker`.~~ Resolved —
-  `lantern-crypto`'s `Keystore` (`lantern-crypto/STATUS.md`) now builds real object semantics
-  (key ID + operation scoping) on top of `Broker::mint`/`grant`/`grant_via_reply`/`revoke`,
-  exercised end to end against a real `KernelState`. `lantern-filesystem` remains open as a
-  second, still-unstarted consumer.
+  `lantern-crypto` keystore building real object semantics on top of `Broker`.~~ Resolved
+  twice over — `lantern-crypto`'s `Keystore` (`lantern-crypto/STATUS.md`) builds real object
+  semantics (key ID + operation scoping) on top of `Broker::mint`/`grant`/`grant_via_reply`/
+  `revoke`, and `lantern-filesystem`'s `Store` (`lantern-filesystem/STATUS.md`) does the same
+  one layer up (file ID + read/write scoping), both exercised end to end against a real
+  `KernelState`.
 
 ## Blocked on
 - ~~Kernel capability mechanism ([`lantern-kernel`](https://github.com/lantern-os/lantern-kernel)).~~ Resolved —
