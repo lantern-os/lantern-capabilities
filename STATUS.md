@@ -32,8 +32,12 @@
 
 ## Next
 - Fix the rights lattice per object type.
-- The sealed-cap token format (RFC-0003's third layer) — blocked on `lantern-crypto`'s
-  keystore, see "Blocked on".
+- ~~The sealed-cap token format (RFC-0003's third layer) — blocked on `lantern-crypto`'s
+  keystore.~~ Unblocked and drafted —
+  [RFC-0011](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0011-sealed-capability-token-format.md)
+  (Draft, awaiting acceptance) proposes a macaroon-style BLAKE3-keyed-MAC-chained format on
+  top of `Broker::mint`/`grant` and `lantern-crypto`'s `Keystore` MAC keys. Implementation
+  waits on RFC acceptance, not on any remaining code blocker.
 - **The mint/grant sequence `Broker` implements is now proven under real confined U-mode
   `ecall`s, not just against a direct `KernelState`** — `lantern-boot`'s new, isolated
   `lantern-boot-broker-demo` binary (`lantern-boot/src/broker_demo/`,
@@ -60,7 +64,11 @@
 - ~~Kernel capability mechanism ([`lantern-kernel`](https://github.com/lantern-os/lantern-kernel)).~~ Resolved —
   RFC-0009/ADR-0014, and now RFC-0010's `extra_caps == 1` transfer + `CopyCross`, both real
   and QEMU-validated (`lantern-kernel/STATUS.md`).
-- Crypto signing for sealed caps ([`lantern-crypto`](https://github.com/lantern-os/lantern-crypto)) — still open;
-  `lantern-crypto`'s Phase 1 primitive set is accepted (RFC-0007/ADR-0011) but its
-  keystore/signing service doesn't exist yet. Only blocks the *sealed*-capability layer
-  (RFC-0003's third layer); kernel- and service-layer capability work is unblocked now.
+- ~~Crypto signing for sealed caps ([`lantern-crypto`](https://github.com/lantern-os/lantern-crypto)) —
+  `lantern-crypto`'s keystore/signing service doesn't exist yet.~~ Resolved —
+  `lantern-crypto`'s `Keystore` now has real Ed25519 signing and BLAKE3-keyed MAC keys
+  (`lantern-crypto/STATUS.md`), and
+  [RFC-0011](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0011-sealed-capability-token-format.md)
+  (Draft) specifies the sealed-capability format built on them. Only blocks *implementing*
+  RFC-0011 pending its acceptance; kernel- and service-layer capability work has been
+  unblocked since RFC-0010.
