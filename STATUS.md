@@ -33,11 +33,12 @@
 ## Next
 - Fix the rights lattice per object type.
 - ~~The sealed-cap token format (RFC-0003's third layer) — blocked on `lantern-crypto`'s
-  keystore.~~ Unblocked and drafted —
-  [RFC-0011](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0011-sealed-capability-token-format.md)
-  (Draft, awaiting acceptance) proposes a macaroon-style BLAKE3-keyed-MAC-chained format on
-  top of `Broker::mint`/`grant` and `lantern-crypto`'s `Keystore` MAC keys. Implementation
-  waits on RFC acceptance, not on any remaining code blocker.
+  keystore.~~ Resolved —
+  [RFC-0011](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0011-sealed-capability-token-format.md)/[ADR-0015](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0015-sealed-capability-token-format.md)
+  (Accepted) fix a macaroon-style BLAKE3-keyed-MAC-chained format on top of `Broker::mint`/
+  `grant` and `lantern-crypto`'s `Keystore` MAC keys. Implementation now in
+  `lantern-crypto` (see its `STATUS.md`) — `unseal` calling back into this crate's `Broker`
+  is the only piece that lives here.
 - **The mint/grant sequence `Broker` implements is now proven under real confined U-mode
   `ecall`s, not just against a direct `KernelState`** — `lantern-boot`'s new, isolated
   `lantern-boot-broker-demo` binary (`lantern-boot/src/broker_demo/`,
@@ -68,7 +69,5 @@
   `lantern-crypto`'s keystore/signing service doesn't exist yet.~~ Resolved —
   `lantern-crypto`'s `Keystore` now has real Ed25519 signing and BLAKE3-keyed MAC keys
   (`lantern-crypto/STATUS.md`), and
-  [RFC-0011](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0011-sealed-capability-token-format.md)
-  (Draft) specifies the sealed-capability format built on them. Only blocks *implementing*
-  RFC-0011 pending its acceptance; kernel- and service-layer capability work has been
-  unblocked since RFC-0010.
+  [RFC-0011](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0011-sealed-capability-token-format.md)/[ADR-0015](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0015-sealed-capability-token-format.md)
+  (Accepted) fix the sealed-capability format built on them.
