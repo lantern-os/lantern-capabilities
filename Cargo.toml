@@ -2,7 +2,7 @@
 name = "lantern-capabilities"
 version = "0.0.0"
 edition = "2021"
-description = "LanternOS service-layer capability broker — Phase 2 prototype (RFC-0009/RFC-0010)"
+description = "LanternOS service-layer capability broker — Phase 2 prototype (RFC-0009/RFC-0010), Phase 3 confined-execution port (RFC-0018/ADR-0022)"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -10,6 +10,15 @@ publish = false
 name = "lantern_capabilities"
 path = "src/lib.rs"
 
+[features]
+default = ["kernel-backend"]
+# The `&mut KernelState` broker backend — for host tests and for privileged,
+# same-address-space callers (a root task). A confined `Broker` running via the
+# `Abi` backend needs none of this and can build with `default-features = false`
+# (only `lantern-abi` linked).
+kernel-backend = ["dep:lantern-hal", "dep:lantern-kernel"]
+
 [dependencies]
-lantern-hal = { git = "https://github.com/lantern-os/lantern-hal", branch = "main" }
-lantern-kernel = { git = "https://github.com/lantern-os/lantern-kernel", branch = "main" }
+lantern-abi = { git = "https://github.com/lantern-os/lantern-abi", branch = "main" }
+lantern-hal = { git = "https://github.com/lantern-os/lantern-hal", branch = "main", optional = true }
+lantern-kernel = { git = "https://github.com/lantern-os/lantern-kernel", branch = "main", optional = true }

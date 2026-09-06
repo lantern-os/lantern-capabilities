@@ -30,6 +30,22 @@ Endpoints may be **badged** so a service can distinguish callers without trustin
 self-asserted identity — the basis for safely multiplexing one service across mutually
 distrusting clients.
 
+## Broker backend split (RFC-0018 / ADR-0022)
+
+`Broker`'s logic — `mint`'s `Rights::GRANT` policy check, badge allocation, the broker-local
+revocation table, `grant` / `grant_via_reply` — is written once against the
+`BrokerBackend` trait (`mint` / `grant_send` / `grant_reply`). Two backends implement it:
+
+| Backend | Where it runs | How the op happens | Deps |
+| --- | --- | --- | --- |
+| `Abi` | a confined U-mode program | real `ecall` via [`lantern-abi`](https://github.com/lantern-os/lantern-abi)'s `sys::*` | `lantern-abi` only — nothing from the TCB (`default-features = false`) |
+| `KernelBackend` | a privileged root task; host tests | direct `lantern_kernel::{cnode, ipc}` call with `&mut KernelState` | `lantern-kernel` + `lantern-hal` (feature `kernel-backend`, default) |
+
+`lantern-boot`'s `broker-service` runs the real `Broker` via `Abi` under QEMU.
+`lantern-crypto`'s `Keystore` and `lantern-filesystem`'s `Store` compose a `Broker` and,
+for now, thread a `KernelBackend` — their own confinement (and request/reply wire
+protocols) is the remaining ADR-0022 Part 1 work.
+
 ## Layer responsibilities
 - **Kernel layer** (in `lantern-kernel`): CSpace, rights checks, the primitive cap objects.
 - **Service layer** (here + `lantern-runtime`): brokering higher-level object caps, the

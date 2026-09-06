@@ -3,42 +3,43 @@
 //! [ADR-0006](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0006-three-layer-capability-structure.md)).
 //! Phase 2's first prototype code in this crate ([RFC-0009](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0009-phase-1-to-phase-2-transition.md)/
 //! [ADR-0014](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0014-phase-1-complete-phase-2-opened.md)),
-//! built directly on the kernel-layer mechanism [RFC-0010](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0010-cross-process-capability-transfer-and-brokering.md)
-//! added to [`lantern_kernel`]: real `CNodeInvoke::Mint` for attenuation, real
-//! `extra_caps == 1` IPC transfer for `grant`, gated on `Rights::GRANT`.
+//! built on the kernel-layer mechanism [RFC-0010](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0010-cross-process-capability-transfer-and-brokering.md):
+//! real `CNodeInvoke::Mint` for attenuation, real `extra_caps == 1` IPC
+//! transfer for `grant`, gated on `Rights::GRANT`.
 //!
 //! [`Broker`] is deliberately **generic, not a policy engine**: it knows how to
 //! mint an attenuated, badged capability and hand it to a waiting client over
 //! real IPC, and how to track per-badge revocation — nothing about what a
 //! badge's underlying object *means* (a file, a keystore entry, ...). Each
-//! concrete Phase 2 service (the eventual `lantern-filesystem`,
-//! `lantern-crypto` keystore) is expected to build its own request dispatch
-//! and object semantics on top of this, the same way RFC-0003 draws the line
-//! between the generic service-capability *mechanism* (this crate,
-//! `lantern-runtime`) and what any one service's capabilities designate.
+//! concrete Phase 2 service (`lantern-filesystem`, `lantern-crypto` keystore)
+//! is expected to build its own request dispatch and object semantics on top
+//! of this, the same way RFC-0003 draws the line between the generic
+//! service-capability *mechanism* (this crate, `lantern-runtime`) and what any
+//! one service's capabilities designate.
 //!
-//! **What this is not yet:** a real, standalone confined program. Every
-//! [`Broker`] method takes `&mut lantern_kernel::state::KernelState` directly
-//! — valid only for privileged, same-address-space code (the category
-//! `lantern-boot/src/loader.rs`'s root task is in), not a real confined
-//! U-mode program, which has no such pointer and can only reach the kernel
-//! via actual `ecall`s (the way `hello-service` does, with hand-written
-//! inline asm). This crate proves the *sequence of kernel operations* a
-//! broker needs is correct — the same validate-before-deployment role
-//! `loader.rs` plays for its own logic — not a deployable implementation of
-//! it. `lantern-boot`'s `lantern-boot-broker-demo` binary now proves that
-//! same sequence for real under confined U-mode `ecall`s, but as a
-//! hand-written reimplementation (`broker-service/`), not this crate's own
-//! code running — see `STATUS.md` for why that gap remains and what closing
-//! it would actually take.
+//! **Backend split** ([RFC-0018](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0018-confined-execution-port.md) /
+//! [ADR-0022](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0022-confined-service-model-and-call-transport.md)):
+//! `Broker`'s logic is written once, against the [`BrokerBackend`] trait, and
+//! runs in either of two places:
+//!
+//! - [`Abi`] — a **confined U-mode program**. Every operation is a real
+//!   `ecall` via [`lantern_abi`]. `lantern-capabilities` built with
+//!   `default-features = false` links only `lantern-abi` — nothing from the
+//!   TCB. `lantern-boot`'s `broker-service` now runs *this crate's own*
+//!   `Broker` code this way under QEMU (it used to hand-roll the sequence).
+//! - [`KernelBackend`] (feature `kernel-backend`, default) — a privileged,
+//!   same-address-space caller (`lantern-boot`'s root task) or a host test,
+//!   holding a `&mut lantern_kernel::state::KernelState`.
 #![cfg_attr(not(test), no_std)]
 
-use lantern_hal::{MessageTag, TrapFrame};
-use lantern_kernel::cap::{CPtr, Rights, TcbId};
-use lantern_kernel::cnode;
-use lantern_kernel::error::SyscallError;
-use lantern_kernel::ipc;
-use lantern_kernel::state::KernelState;
+mod backend;
+
+pub use backend::{Abi, BrokerBackend};
+#[cfg(feature = "kernel-backend")]
+pub use backend::KernelBackend;
+
+use lantern_abi::wire::CPtr;
+pub use lantern_abi::wire::{Rights, SyscallError};
 
 /// Fixed capacity, no heap — matches every other Phase 1/2 kernel-adjacent
 /// pool in this project ([`lantern_kernel::limits`]'s own convention).
@@ -57,14 +58,10 @@ struct GrantRecord {
 /// `lantern-kernel/STATUS.md` — broker-local tracking is the sanctioned Phase 2
 /// answer, RFC-0010).
 ///
-/// Every operation here is a real call into `lantern_kernel` (`CNodeInvoke`,
-/// IPC `Send`) exactly as a real syscall from this thread would make, not a
-/// simulation of one — the same "calls the real, capability-checked thing"
-/// discipline `lantern-boot/src/loader.rs` follows for its own privileged
-/// operations.
+/// Every operation is a real `CNodeInvoke` / IPC through the [`BrokerBackend`]
+/// — a genuine `ecall` under [`Abi`], a direct `lantern_kernel` call under
+/// [`KernelBackend`] — never a simulation.
 pub struct Broker {
-    /// This broker's own thread identity.
-    self_tcb: TcbId,
     /// A CPtr, in the broker's own CSpace, naming a capability to the
     /// broker's own CNode — required to invoke `CNodeInvoke::Mint` on itself
     /// (`cnode.rs`'s "self-administration ... requires that thread to
@@ -76,13 +73,16 @@ pub struct Broker {
 }
 
 impl Broker {
-    /// `self_tcb`/`self_cnode_cptr` — see their field docs; the caller (real
-    /// broker setup code, or a test) is responsible for having already placed
-    /// a self-referencing `Capability::CNode` at `self_cnode_cptr` in the
-    /// broker's own CSpace, the same bootstrap step `lantern-boot`'s root task
-    /// performs for itself.
-    pub const fn new(self_tcb: TcbId, self_cnode_cptr: CPtr) -> Self {
-        Self { self_tcb, self_cnode_cptr, next_badge: 1, grants: [None; MAX_GRANTS] }
+    /// `self_cnode_cptr` — see its field doc; the caller (real broker setup
+    /// code, or a test) is responsible for having already placed a
+    /// self-referencing `Capability::CNode` there in the broker's own CSpace,
+    /// the same bootstrap step `lantern-boot`'s root task performs for itself.
+    ///
+    /// The broker no longer carries a `TcbId`: with the [`Abi`] backend the
+    /// kernel identifies the calling thread as `current`, and the
+    /// [`KernelBackend`] carries the `TcbId` a privileged caller needs.
+    pub const fn new(self_cnode_cptr: CPtr) -> Self {
+        Self { self_cnode_cptr, next_badge: 1, grants: [None; MAX_GRANTS] }
     }
 
     /// Mints an attenuated copy of the capability at `source_slot` (in the
@@ -101,24 +101,18 @@ impl Broker {
     /// confusingly, inside `grant`.
     pub fn mint(
         &mut self,
-        state: &mut KernelState,
+        backend: &mut impl BrokerBackend,
         source_slot: CPtr,
         scratch_slot: CPtr,
         rights: Rights,
     ) -> Result<u64, SyscallError> {
-        if !rights.contains(Rights::GRANT) {
+        if rights.bits() & Rights::GRANT.bits() == 0 {
             return Err(SyscallError::IllegalOperation);
         }
         let slot = self.grants.iter().position(Option::is_none).ok_or(SyscallError::NotEnoughMemory)?;
 
         let badge = self.next_badge;
-        let packed = ((badge as usize) << 8) | rights.bits() as usize;
-        let mut frame = TrapFrame::zeroed();
-        frame.set_tag(MessageTag { label: cnode::LABEL_MINT, length: 0, extra_caps: 0, flags: 0 });
-        frame.set_mr(1, source_slot);
-        frame.set_mr(2, scratch_slot);
-        frame.set_mr(3, packed);
-        cnode::invoke(state, self.self_tcb, self.self_cnode_cptr, &mut frame)?;
+        backend.mint(self.self_cnode_cptr, source_slot, scratch_slot, badge, rights)?;
 
         // Nothing above this point can fail once the mint itself succeeds, so
         // there's no risk of recording a badge for a mint that didn't happen
@@ -144,17 +138,12 @@ impl Broker {
     /// — see [`Broker::grant_via_reply`] instead.
     pub fn grant(
         &self,
-        state: &mut KernelState,
+        backend: &mut impl BrokerBackend,
         endpoint_cptr: CPtr,
         scratch_slot: CPtr,
         payload: (usize, usize),
     ) -> Result<(), SyscallError> {
-        let mut frame = TrapFrame::zeroed();
-        frame.set_tag(MessageTag { label: 0, length: 0, extra_caps: 1, flags: 0 });
-        frame.set_mr(1, scratch_slot);
-        frame.set_mr(2, payload.0);
-        frame.set_mr(3, payload.1);
-        ipc::send(state, self.self_tcb, endpoint_cptr, &mut frame, false)
+        backend.grant_send(endpoint_cptr, scratch_slot, payload)
     }
 
     /// Like [`Broker::grant`], but replies to whichever `Call` this broker is
@@ -170,16 +159,11 @@ impl Broker {
     /// rather than [`Broker::grant`]'s bare `Recv`-then-`Send`.
     pub fn grant_via_reply(
         &self,
-        state: &mut KernelState,
+        backend: &mut impl BrokerBackend,
         scratch_slot: CPtr,
         payload: (usize, usize),
     ) -> Result<(), SyscallError> {
-        let mut frame = TrapFrame::zeroed();
-        frame.set_tag(MessageTag { label: 0, length: 0, extra_caps: 1, flags: 0 });
-        frame.set_mr(1, scratch_slot);
-        frame.set_mr(2, payload.0);
-        frame.set_mr(3, payload.1);
-        ipc::reply(state, self.self_tcb, &mut frame)
+        backend.grant_reply(scratch_slot, payload)
     }
 
     /// Marks `badge` revoked. Does **not** touch the kernel capability the
@@ -211,11 +195,20 @@ impl Broker {
     }
 }
 
-#[cfg(test)]
+// The tests drive `Broker` through the `KernelBackend`, so they need the
+// `kernel-backend` feature (on by default). `cargo test --no-default-features`
+// simply skips them; the crate itself still builds (that's the confined `Abi`
+// path, checked by `cargo build --no-default-features --target riscv64...`).
+#[cfg(all(test, feature = "kernel-backend"))]
 mod tests {
     use super::*;
-    use lantern_kernel::cap::{CNode, CNodeId, Capability, EndpointId, NotificationId};
+    use lantern_hal::{MessageTag, TrapFrame};
+    use lantern_kernel::cap::{
+        CNode, CNodeId, Capability, EndpointId, NotificationId, Rights as KRights, TcbId,
+    };
     use lantern_kernel::object::{Notification, Tcb};
+    use lantern_kernel::state::KernelState;
+    use lantern_kernel::ipc;
 
     /// A broker thread (its own CSpace, holding a self-CNode capability at
     /// slot 0 and a shared endpoint at slot 1) and a client thread (its own
@@ -240,7 +233,7 @@ mod tests {
             Capability::CNode(broker_cnode);
 
         let ep_idx = state.endpoints.alloc(lantern_kernel::object::Endpoint::new()).unwrap();
-        let ep = Capability::Endpoint { id: EndpointId(ep_idx as u16), badge: 0, rights: Rights::ALL };
+        let ep = Capability::Endpoint { id: EndpointId(ep_idx as u16), badge: 0, rights: KRights::ALL };
         *state.cnodes.get_mut(broker_cnode.0 as usize).unwrap().slot_mut(1).unwrap() = ep;
 
         let client_cnode = CNodeId(state.cnodes.alloc(CNode::empty()).unwrap() as u16);
@@ -248,7 +241,7 @@ mod tests {
         state.tcbs.get_mut(client_tcb.0 as usize).unwrap().cspace = Some(client_cnode);
         *state.cnodes.get_mut(client_cnode.0 as usize).unwrap().slot_mut(1).unwrap() = ep;
 
-        let broker = Broker::new(broker_tcb, 0);
+        let broker = Broker::new(0);
         Fixture { state, broker, broker_tcb, client_tcb, ep_cptr: 1 }
     }
 
@@ -269,7 +262,7 @@ mod tests {
         let source = Capability::Notification {
             id: NotificationId(notif_idx as u16),
             badge: 0,
-            rights: Rights::READ.union(Rights::GRANT),
+            rights: KRights::READ.union(KRights::GRANT),
         };
         *f.state.cnodes.get_mut(0).unwrap().slot_mut(5).unwrap() = source;
 
@@ -280,16 +273,16 @@ mod tests {
         ipc::recv(&mut f.state, f.client_tcb, f.ep_cptr, &mut frame).unwrap();
         assert_eq!(f.state.scheduler.current, Some(f.broker_tcb));
 
-        let badge = f.broker.mint(&mut f.state, 5, 6, Rights::READ.union(Rights::GRANT)).unwrap();
+        let badge = f.broker.mint(&mut KernelBackend::new(&mut f.state, f.broker_tcb), 5, 6, Rights::READ.union(Rights::GRANT)).unwrap();
         assert!(!f.broker.is_revoked(badge));
 
-        f.broker.grant(&mut f.state, f.ep_cptr, 6, (111, 222)).unwrap();
+        f.broker.grant(&mut KernelBackend::new(&mut f.state, f.broker_tcb), f.ep_cptr, 6, (111, 222)).unwrap();
 
         let client_cnode = f.state.tcbs.get(f.client_tcb.0 as usize).unwrap().cspace.unwrap();
         let landed = f.state.cnodes.get(client_cnode.0 as usize).unwrap().get(9).unwrap();
         // Transfer is a real copy of whatever the scratch slot held -- exactly
         // the READ|GRANT that was minted, not attenuated further in transit.
-        assert_eq!(landed.rights(), Rights::READ.union(Rights::GRANT));
+        assert_eq!(landed.rights(), KRights::READ.union(KRights::GRANT));
         assert!(matches!(landed, Capability::Notification { id, .. } if id == NotificationId(notif_idx as u16)));
 
         // The broker's own scratch copy is untouched -- transfer is a copy.
@@ -307,7 +300,7 @@ mod tests {
         let source = Capability::Notification {
             id: NotificationId(notif_idx as u16),
             badge: 0,
-            rights: Rights::READ.union(Rights::GRANT),
+            rights: KRights::READ.union(KRights::GRANT),
         };
         *f.state.cnodes.get_mut(0).unwrap().slot_mut(5).unwrap() = source;
 
@@ -315,7 +308,7 @@ mod tests {
         // The source itself has GRANT, but the *requested* rights don't --
         // Broker's own policy rejects this before ever calling into the
         // kernel (a mint that can't be granted onward is useless here).
-        assert_eq!(f.broker.mint(&mut f.state, 5, 6, Rights::READ), Err(SyscallError::IllegalOperation));
+        assert_eq!(f.broker.mint(&mut KernelBackend::new(&mut f.state, f.broker_tcb), 5, 6, Rights::READ), Err(SyscallError::IllegalOperation));
         assert_eq!(f.state.cnodes.get(0).unwrap().get(6), Some(Capability::Null), "nothing minted");
     }
 
@@ -326,7 +319,7 @@ mod tests {
         let source = Capability::Notification {
             id: NotificationId(notif_idx as u16),
             badge: 0,
-            rights: Rights::READ.union(Rights::GRANT), // no WRITE
+            rights: KRights::READ.union(KRights::GRANT), // no WRITE
         };
         *f.state.cnodes.get_mut(0).unwrap().slot_mut(5).unwrap() = source;
 
@@ -335,7 +328,7 @@ mod tests {
         // the kernel's monotone-attenuation check still applies: the source
         // doesn't have WRITE, so Mint can't grant it either.
         assert_eq!(
-            f.broker.mint(&mut f.state, 5, 6, Rights::WRITE.union(Rights::GRANT)),
+            f.broker.mint(&mut KernelBackend::new(&mut f.state, f.broker_tcb), 5, 6, Rights::WRITE.union(Rights::GRANT)),
             Err(SyscallError::IllegalOperation)
         );
     }
@@ -347,7 +340,7 @@ mod tests {
         let source = Capability::Notification {
             id: NotificationId(notif_idx as u16),
             badge: 0,
-            rights: Rights::READ.union(Rights::GRANT),
+            rights: KRights::READ.union(KRights::GRANT),
         };
         *f.state.cnodes.get_mut(0).unwrap().slot_mut(5).unwrap() = source;
 
@@ -356,8 +349,8 @@ mod tests {
         let mut frame = recv_frame(9);
         ipc::recv(&mut f.state, f.client_tcb, f.ep_cptr, &mut frame).unwrap();
 
-        let badge = f.broker.mint(&mut f.state, 5, 6, Rights::READ.union(Rights::GRANT)).unwrap();
-        f.broker.grant(&mut f.state, f.ep_cptr, 6, (0, 0)).unwrap();
+        let badge = f.broker.mint(&mut KernelBackend::new(&mut f.state, f.broker_tcb), 5, 6, Rights::READ.union(Rights::GRANT)).unwrap();
+        f.broker.grant(&mut KernelBackend::new(&mut f.state, f.broker_tcb), f.ep_cptr, 6, (0, 0)).unwrap();
 
         f.broker.revoke(badge).unwrap();
         assert!(f.broker.is_revoked(badge));
@@ -382,7 +375,7 @@ mod tests {
         let source = Capability::Notification {
             id: NotificationId(notif_idx as u16),
             badge: 0,
-            rights: Rights::READ.union(Rights::GRANT),
+            rights: KRights::READ.union(KRights::GRANT),
         };
         *f.state.cnodes.get_mut(0).unwrap().slot_mut(5).unwrap() = source;
 
@@ -404,14 +397,14 @@ mod tests {
         assert_eq!(f.state.scheduler.current, Some(f.broker_tcb));
 
         // Broker mints and replies with the grant attached, in one round trip.
-        let badge = f.broker.mint(&mut f.state, 5, 6, Rights::READ.union(Rights::GRANT)).unwrap();
-        f.broker.grant_via_reply(&mut f.state, 6, (111, 222)).unwrap();
+        let badge = f.broker.mint(&mut KernelBackend::new(&mut f.state, f.broker_tcb), 5, 6, Rights::READ.union(Rights::GRANT)).unwrap();
+        f.broker.grant_via_reply(&mut KernelBackend::new(&mut f.state, f.broker_tcb), 6, (111, 222)).unwrap();
 
         assert_eq!(f.state.scheduler.current, Some(f.client_tcb));
         assert!(!f.broker.is_revoked(badge));
         let client_cnode = f.state.tcbs.get(f.client_tcb.0 as usize).unwrap().cspace.unwrap();
         let landed = f.state.cnodes.get(client_cnode.0 as usize).unwrap().get(9).unwrap();
-        assert_eq!(landed.rights(), Rights::READ.union(Rights::GRANT));
+        assert_eq!(landed.rights(), KRights::READ.union(KRights::GRANT));
         assert!(matches!(landed, Capability::Notification { id, .. } if id == NotificationId(notif_idx as u16)));
     }
 }
