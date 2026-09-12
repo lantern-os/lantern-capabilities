@@ -47,9 +47,11 @@
 
 ## Next
 - **`Keystore`/`Store` onto the backend abstraction** (ADR-0022 Part 1, remaining): give
-  each a real request/reply wire protocol (SIGN/ENCRYPT/DECRYPT; READ/WRITE) and an `Abi`
-  path so they too can run confined, not just `Broker`. Each wire protocol is an ADR-0022
-  follow-up.
+  each an `Abi` path so they too can run confined, not just `Broker`. The request/reply
+  wire protocol each needs (SIGN/ENCRYPT/DECRYPT; READ/WRITE) is now fixed —
+  [RFC-0019](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0019-confined-service-call-protocol.md)/[ADR-0024](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0024-confined-service-call-protocol.md),
+  Accepted 2026-09-12 — so this is implementation against a decided format, not a design
+  gap.
 - Fix the rights lattice per object type.
 - ~~The sealed-cap token format (RFC-0003's third layer) — blocked on `lantern-crypto`'s
   keystore.~~ Resolved —
