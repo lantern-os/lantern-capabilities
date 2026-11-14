@@ -45,6 +45,9 @@
   `KernelBackend` (mechanical; their public `&mut KernelState` API unchanged, 31 + 12 tests
   green). clippy clean host + `riscv64` (both feature sets).
 
+- **Grant records are reused once revoked (2026-11-14, [RFC-0029](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0029-a-confined-launcher.md)/[ADR-0035](https://github.com/lantern-os/lantern-rfcs/blob/main/adr/0035-a-confined-launcher.md)).** When every record is taken, `Broker::mint` reuses a revoked
+  badge's. That's safe: a badge is never minted twice, and one no longer remembered reads as revoked. Without it, the
+  interactive system's services would refuse every grant after about 30 app runs. Tested.
 ## Next
 - **`Keystore`/`Store` onto the backend abstraction** (ADR-0022 Part 1, remaining): give
   each an `Abi` path so they too can run confined, not just `Broker`. The request/reply

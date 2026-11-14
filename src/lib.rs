@@ -109,7 +109,15 @@ impl Broker {
         if rights.bits() & Rights::GRANT.bits() == 0 {
             return Err(SyscallError::IllegalOperation);
         }
-        let slot = self.grants.iter().position(Option::is_none).ok_or(SyscallError::NotEnoughMemory)?;
+        // A free record, or else a revoked one: a badge is never minted twice, and one this broker no longer
+        // remembers reads as revoked ([`Broker::is_revoked`]), so forgetting a revoked badge lets nothing back in
+        // ([RFC-0029](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0029-a-confined-launcher.md): apps come and go without limit).
+        let slot = self
+            .grants
+            .iter()
+            .position(Option::is_none)
+            .or_else(|| self.grants.iter().position(|g| g.is_some_and(|g| g.revoked)))
+            .ok_or(SyscallError::NotEnoughMemory)?;
 
         let badge = self.next_badge;
         backend.mint(self.self_cnode_cptr, source_slot, scratch_slot, badge, rights)?;
@@ -171,10 +179,9 @@ impl Broker {
     /// broker keeps working at the kernel level; every dispatch the broker
     /// itself handles for `badge` must consult [`Broker::is_revoked`] and
     /// refuse once this is set. `InvalidCapability` if `badge` was never
-    /// minted here (or has already been dropped — this broker never reclaims
-    /// a badge slot once granted, matching `CNodeInvoke::Delete`'s own
-    /// documented no-reclaim gap for the same underlying reason: no
-    /// refcounting yet).
+    /// minted here, or was forgotten: [`Broker::mint`] reuses a revoked badge's
+    /// record once every record is taken. A forgotten badge still reads as
+    /// revoked, since badges are never minted twice.
     pub fn revoke(&mut self, badge: u64) -> Result<(), SyscallError> {
         let record = self
             .grants
@@ -360,6 +367,28 @@ mod tests {
         // by whatever dispatch loop consults `is_revoked`, not by the kernel.
         let client_cnode = f.state.tcbs.get(f.client_tcb.0 as usize).unwrap().cspace.unwrap();
         assert!(f.state.cnodes.get(client_cnode.0 as usize).unwrap().get(9).is_some());
+    }
+
+    #[test]
+    fn a_full_broker_forgets_only_a_revoked_badge_and_never_mints_one_twice() {
+        let mut f = setup();
+        let notif_idx = f.state.notifications.alloc(Notification::new()).unwrap();
+        *f.state.cnodes.get_mut(0).unwrap().slot_mut(5).unwrap() =
+            Capability::Notification { id: NotificationId(notif_idx as u16), badge: 0, rights: KRights::ALL };
+        f.state.scheduler.current = Some(f.broker_tcb);
+        let mint = |f: &mut Fixture| {
+            let r = f.broker.mint(&mut KernelBackend::new(&mut f.state, f.broker_tcb), 5, 6, Rights::READ.union(Rights::GRANT));
+            *f.state.cnodes.get_mut(0).unwrap().slot_mut(6).unwrap() = Capability::Null;
+            r
+        };
+        let badges: Vec<u64> = (0..MAX_GRANTS).map(|_| mint(&mut f).unwrap()).collect();
+        assert_eq!(mint(&mut f), Err(SyscallError::NotEnoughMemory), "full, and nothing revoked");
+        f.broker.revoke(badges[3]).unwrap();
+        let fresh = mint(&mut f).unwrap();
+        assert!(!badges.contains(&fresh), "a new badge, never a reused one");
+        assert!(f.broker.is_revoked(badges[3]), "forgotten, and still refused");
+        assert!(!f.broker.is_revoked(fresh));
+        assert!(badges.iter().filter(|&&b| b != badges[3]).all(|&b| !f.broker.is_revoked(b)));
     }
 
     #[test]
