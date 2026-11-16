@@ -9,11 +9,8 @@ global namespace, no identity-based ACLs.
 - **Decision of record:** [RFC-0003 — The LanternOS capability model](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0003-capability-model.md).
 - **System context:** [wiki/Security](https://github.com/lantern-os/lantern-docs/blob/main/wiki/Security.md).
 
-> **Phase 2 complete** (RFC-0017/ADR-0021), roadmap gate now Phase 3. As of 2026-09-05
-> (RFC-0018/ADR-0022) `Broker` runs its own code in a **confined U-mode program** via the
-> `Abi` backend — `lantern-boot`'s `broker-service` proves it under QEMU. A host/root-task
-> caller uses the `KernelBackend` (`&mut KernelState`, feature `kernel-backend`, default).
-> `Keystore`/`Store` confinement is the remaining ADR-0022 Part 1 work. See [`STATUS.md`](./STATUS.md).
+> **Phase 4** ([RFC-0036](https://github.com/lantern-os/lantern-rfcs/blob/main/rfcs/0036-phase-3-to-phase-4-transition.md)): hardware and assurance. `Broker`'s mint, grant and revoke run in confined programs on the kernel, through the `Abi`
+> backend; the kernel backend remains for host tests. See [`STATUS.md`](./STATUS.md).
 
 ## The three layers
 1. **Kernel capabilities** — seL4-style handles to kernel objects (in [`lantern-kernel`](https://github.com/lantern-os/lantern-kernel)).
